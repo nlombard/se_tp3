@@ -1,0 +1,210 @@
+#! venv/bin/python
+
+
+#does not handle global vars! no clue how to do that with my recursive solution and the parser I am using
+#could copy global set in during new functions and new ifs? //maybe just new functions?
+
+import argparse
+import pycparser
+def print_sym_vars(sym_vars):
+    print '\nSym vars: {}\n'.format(sym_vars)
+
+def get_file_name():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(dest='file',help='Name of file to parse')
+    args = parser.parse_args()
+    return args.file
+
+def parse():
+    cfile = get_file_name()
+    print 'Parsing: {}\n'.format(cfile)
+    parser = pycparser.c_parser.CParser()
+    text = open(cfile).read()
+    try:
+        ast = parser.parse(text,filename=cfile)
+    except pycparser.plyparser.ParseError:
+        return None
+
+    #~ast.show() #show whole ast tree
+    return ast
+
+def create_offset(offset):
+    line = ''
+    line += ' ' * offset
+    return line
+
+def update_sym_vars(new_value_dict, dict_list):
+    for sym_dict in dict_list:
+        sym_dict.update(new_value_dict)
+
+def update_assignment(dict_list,lname,rname):
+    for sym_dict in dict_list:
+        sym_dict[lname] = sym_dict[rname]
+
+def update_assignment_value(sym_dict,lname,value):
+    sym_dict[lname] = value
+
+def update_operation(dict_list,operation,left):
+    for sym_dict in dict_list:
+        new_value = handle_op(operation.op,operation.left,operation.right,sym_dict)
+        sym_dict[left] = new_value
+
+def cond_operation(sym_dict,operation,left):
+    cond_list = []
+    new_value = handle_op(operation.op,operation.left,operation.right,sym_dict)
+    cond_list.append(new_value)
+    return cond_list
+
+def cond_assignment(sym_dict,lname,rname):
+    cond_list = []
+    cond_list.append(sym_dict[rname])
+    return cond_list
+
+def handle_decl(body_item):
+    declared_var = {}
+    if type(body_item) == pycparser.c_ast.Decl:
+        #if verbose: body_item.show()
+        declared_var[body_item.name] = body_item.name + '~'
+        #if verbose: print_sym_vars(declared_var)
+    return declared_var
+
+
+def handle_op(op,left,right,sym_dict):
+    if type(left) == pycparser.c_ast.Constant:
+        left_value = left.value
+    else:
+        left_value = sym_dict[left.name]
+    if type(right) == pycparser.c_ast.Constant:
+        right_value = right.value
+    else:
+        right_value = sym_dict[right.name]
+        
+    equation = '({}) {} ({})'.format(left_value, op, right_value)
+    return equation
+
+def handle_cond(cond,dict_list,offset):
+    #this just needs to print out the conditions, neccessary, so create a list of each condition for each
+    all_conds = []
+    off_line = create_offset(offset)
+    for sym_dict in dict_list:
+        cond_line = []
+        if type(cond) == pycparser.c_ast.BinaryOp: # <var> <binary_op> <var>
+            if type(cond.left) == pycparser.c_ast.ID: 
+                cond_line.extend([sym_dict[cond.left.name],cond.op])
+                if type(cond.right) == pycparser.c_ast.BinaryOp:
+                        #~ print body_item.rvalue.op
+                        operation = cond.right
+                        cond_line.extend(cond_operation(sym_dict,operation,cond.left.name))
+                elif type(cond.right) == pycparser.c_ast.ID:
+                    cond_line.extend(cond_assignment(sym_dict,cond.left.name,cond.right.name))
+        all_conds.append(cond_line)
+    print off_line, 'Conditions for this if:', all_conds
+
+def handle_if(dict_list,body_item,offset):
+    off_line = create_offset(offset)
+    print off_line,'In if:'
+    offset += 4
+    if_sym_list = []
+    for sym_dict in dict_list:
+        if_sym_list.append(sym_dict.copy())
+    #if_sym_list is now different!
+    #body_item.cond.show()
+    handle_cond(body_item.cond,if_sym_list,offset)
+    #body_item.iftrue.show()
+    for if_item in body_item.iftrue.block_items:
+        #if_item.show()
+        visit_block(if_item,if_sym_list,offset)
+    #need to print statement
+    #need to go through blocks!
+    return if_sym_list
+
+def function_init(func_params,parent_vars,sym_dict):
+    func_dict = {}
+    for i in range(0,len(func_params)):
+        param = func_params[i]
+        parent_var = parent_vars[i]
+        func_dict[param.name] = sym_dict[parent_var.name]
+    return func_dict
+
+def handle_fcn(fcn,sym_dict,fcn_id,offset):
+    off_line = create_offset(offset)
+    func_list = [] #for funcs I am assuming only one sym_path
+    print '\n', off_line, 'Running Fcn: '
+    for func_def in ast.ext:
+        function_decl = func_def.decl
+        if function_decl.name == fcn_id.name: #explore main function def first
+            #need to explore statment first!
+            func_list.append(function_init(func_def.decl.type.args.params,fcn.args.exprs,sym_dict))
+            #~func_def.body.show()
+            for body_item in func_def.body.block_items:
+                #~body_item.show()
+                response = visit_block(body_item,func_list,offset)
+                if response != None:
+                    return response #this should just be a value and we assign it on the return
+
+def handle_return(body_item,dict_list):
+    #only case of simple function returns so dict_list of 0
+    sym_dict = dict_list[0]
+    if type(body_item.expr) == pycparser.c_ast.BinaryOp:
+        operation = body_item.expr
+        return handle_op(operation.op,operation.left,operation.right,sym_dict)
+    elif type(body_item.expr) == pycparser.c_ast.Constant:
+        return body_item.expr.value
+
+def visit_block(body_item,sym_vars_list,offset):
+    off_line = create_offset(offset)
+    print off_line,'sym_vars:',sym_vars_list
+    if verbose: body_item.show(offset=offset+1)
+    if type(body_item) == pycparser.c_ast.Decl:
+        new_value_dict = handle_decl(body_item)
+        update_sym_vars(new_value_dict,sym_vars_list)
+    elif type(body_item) == pycparser.c_ast.Assignment:
+        if body_item.op == '=':
+            if type(body_item.lvalue) == pycparser.c_ast.ID:
+                #~ print body_item.lvalue.name
+                if type(body_item.rvalue) == pycparser.c_ast.BinaryOp:
+                    #~ print body_item.rvalue.op
+                    operation = body_item.rvalue
+                    update_operation(sym_vars_list,operation,body_item.lvalue.name)
+                elif type(body_item.rvalue) == pycparser.c_ast.ID:
+                    update_assignment(sym_vars_list,body_item.lvalue.name,body_item.rvalue.name)
+                elif type(body_item.rvalue) == pycparser.c_ast.FuncCall:
+                    #nothing inside is changed, so give it an empty list?, need a way to pass in the variables
+                    #get the simple return back
+                    #need to call visit_block?
+                    for sym_dict in sym_vars_list:
+                        new_value = handle_fcn(body_item.rvalue,sym_dict,body_item.rvalue.name,offset)
+                        #give left value the new_value
+                        update_assignment_value(sym_dict,body_item.lvalue.name,new_value)
+
+    elif type(body_item) == pycparser.c_ast.If:
+        new_dict_list = handle_if(sym_vars_list,body_item,offset)
+        print off_line,'End if:'
+        for new_dict in new_dict_list:
+            sym_vars_list.append(new_dict)
+    elif type(body_item) == pycparser.c_ast.Return:
+        return handle_return(body_item,sym_vars_list)
+    return
+
+def run_code(ast):
+    print '\nRunning Code: '
+    for func_def in ast.ext:
+        function_decl = func_def.decl
+        if function_decl.name == 'main': #explore main function def first
+            #~func_def.body.show()
+            for body_item in func_def.body.block_items:
+                #~body_item.show()
+                visit_block(body_item,func_sym_vars_list,3)
+
+
+if __name__ == '__main__':
+
+    #take in file
+    verbose = True
+    ast = parse()
+    if ast == None:
+        print 'Failed to parse C file, bad syntax'
+    else:
+        func_sym_vars_list = [{}]
+        run_code(ast)
+        print func_sym_vars_list

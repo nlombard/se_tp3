@@ -13,4 +13,4 @@ To set up virtual env:
 
 To run:
 	
-	./symboliexec littlepgrogram.c 
+	./symbolexec littlepgrogram.c 
