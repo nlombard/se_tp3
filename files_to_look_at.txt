@@ -1,3 +1,0 @@
-pycparser/_c_ast.cfg 
-pycparser/c_ast.py
-examples/explore_ast.py
